@@ -54,45 +54,28 @@ def get_access_token(account: str):
         return data.get("access_token", "0"), data.get("open_id", "0")
 
 def find_protobuf_start(data: bytes) -> int:
-    """
-    LoginRes protobuf hamesha field markers ke saath start hota hai.
-    Hum response me se woh index dhoondhte hain jahan se valid protobuf start hota hai.
-    Common markers: 
-      - \x08 (field 1 varint - accountId ya similar)
-      - \x12\x03IND pattern (region field)
-    """
-    # Method 1: "IND" pattern dhoondo (region field ke saath aata hai)
-    # \x12\x03IND = field 2 (string, len 3), "IND"
     idx = data.find(b'\x12\x03IND')
     if idx != -1:
-        # \x12 se pehle \x08 (field 1) hota hai — wahan se start karo
-        # \x08 wala byte dhoondo idx se pehle
         for i in range(idx - 1, max(idx - 20, -1), -1):
             if data[i] == 0x08:
                 return i
 
-    # Method 2: JWT token ke just pehle wala protobuf field (B\xe7\x05) dhoondo
     jwt_marker = data.find(b'B\xe7\x05eyJ')
     if jwt_marker != -1:
-        # Usse pehle \x08 dhoondo
         for i in range(jwt_marker - 1, max(jwt_marker - 200, -1), -1):
             if data[i] == 0x08:
                 return i
 
-    # Method 3: Fallback — pehla \x08 dhoondo
     return data.find(b'\x08')
 
 def generate_jwt_token(uid: str, password: str):
-    # Create account string from UID and password
     account = f"uid={uid}&password={password}"
 
-    # Get access token and open_id
     token_val, open_id = get_access_token(account)
 
     if token_val == "0" or open_id == "0":
         raise Exception("Invalid UID or Password — access token not received")
 
-    # Prepare login request
     body = json.dumps({
         "open_id": open_id,
         "open_id_type": "4",
@@ -100,11 +83,9 @@ def generate_jwt_token(uid: str, password: str):
         "orign_platform_type": "4"
     })
 
-    # Convert to protobuf and encrypt
     proto_bytes = json_to_proto(body, FreeFire_pb2.LoginReq())
     payload = aes_cbc_encrypt(MAIN_KEY, MAIN_IV, proto_bytes)
 
-    # Send login request
     url = f"{LOGIN_URL}MajorLogin"
     headers = {
         'User-Agent': USERAGENT,
@@ -123,9 +104,6 @@ def generate_jwt_token(uid: str, password: str):
     with httpx.Client() as client:
         resp = client.post(url, data=payload, headers=headers)
 
-        print(f"=== HTTP {resp.status_code} | Content-Length: {len(resp.content)} ===")
-
-        # === Protobuf ka correct start dhoondo ===
         start_idx = find_protobuf_start(resp.content)
 
         if start_idx == -1:
@@ -134,10 +112,7 @@ def generate_jwt_token(uid: str, password: str):
             )
 
         proto_data = resp.content[start_idx:]
-        print(f"=== Protobuf starts at index {start_idx} ===")
-        print(f"=== Proto data (first 200 bytes): {proto_data[:200]} ===")
 
-        # Parse protobuf
         try:
             msg = json.loads(json_format.MessageToJson(
                 decode_protobuf(proto_data, FreeFire_pb2.LoginRes)
@@ -149,7 +124,6 @@ def generate_jwt_token(uid: str, password: str):
                 f"Error: {parse_err}"
             )
 
-        # Prepare response
         response_data = {
             "account_Id": msg.get("accountId", ""),
             "agoraEnvironment": msg.get("agoraEnvironment", "live"),
@@ -163,6 +137,10 @@ def generate_jwt_token(uid: str, password: str):
         return response_data
 
 # === Flask Routes ===
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({"status": "Server is running!"}), 200
+
 @app.route('/token', methods=['GET'])
 def get_jwt_token():
     uid = request.args.get('uid')
